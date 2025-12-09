@@ -1,0 +1,36 @@
+# --- Python junk ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# --- Environments / config ---
+.env/
+.venv/
+
+# --- Camera / FP recordings ---
+data/
+Zed_Depth/
+*.mcap
+*.bag
+*.mp4
+*.avi
+*.mov
+
+# --- Heavy SDK blobs ---
+ZED_SDK/
+*.whl
+*.zip
+*.tar
+*.tar.gz
+
+# --- Logs / misc ---
+logs/
+wandb/
+outputs/
+checkpoints/
+
+# IDE stuff
+.vscode/
+.idea/
