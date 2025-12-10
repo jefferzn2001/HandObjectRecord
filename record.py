@@ -526,7 +526,12 @@ def main():
         "--name",
         type=str,
         default=None,
-        help="Optional suffix for recording name, e.g. hand_seq"
+        help="Recording name (e.g. 'Jmanip1'). If not provided, uses timestamp."
+    )
+    parser.add_argument(
+        "--use-timestamp",
+        action="store_true",
+        help="Prepend timestamp to --name (e.g. '20251208_123456_Jmanip1')"
     )
     parser.add_argument(
         "--sam-checkpoint",
@@ -839,8 +844,18 @@ def main():
                 if not recording:
                     # Start recording: create folders and cam_K.txt
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    seq_name = f"{timestamp}_{args.name}" if args.name else timestamp
+                    if args.name:
+                        seq_name = f"{timestamp}_{args.name}" if args.use_timestamp else args.name
+                    else:
+                        seq_name = timestamp
                     seq_root = data_root / seq_name
+                    
+                    # Check if folder exists and warn
+                    if seq_root.exists():
+                        print(f"[WARN] Folder {seq_root} already exists! Overwriting...")
+                    
+                    # Create traj folder for HaMeR output
+                    traj_root = seq_root / "traj"
 
                     rs_root = seq_root / "realsense"
                     zed_root = seq_root / "zed"
@@ -856,6 +871,7 @@ def main():
                         zed_root / "masks",
                         rs_render_root,
                         zed_render_root,
+                        traj_root,
                     ]:
                         d.mkdir(parents=True, exist_ok=True)
 
