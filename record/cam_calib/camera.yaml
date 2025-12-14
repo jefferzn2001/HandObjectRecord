@@ -27,8 +27,8 @@ cam1:
   gain: 48            # SDK units (0-100)
   # Note: ZED SDK does not support manual white balance setting
   depth_mode: "NEURAL_PLUS"
-  depth_min_m: 0.05
-  depth_max_m: 1.90
+  depth_min_m: 0.04
+  depth_max_m: 2.686
   confidence: 100
   texture_confidence: 100
   depth_stability: 0
@@ -53,6 +53,6 @@ cam2:
   preset_initial: "default"
   preset_frame_10: "default"
   preset_frame_20: "high_accuracy"
-  depth_min_m: 0.05
-  depth_max_m: 1.703
+  depth_min_m: 0.04
+  depth_max_m: 1.886
   rotated_180: true  # RealSense IS mounted upside down

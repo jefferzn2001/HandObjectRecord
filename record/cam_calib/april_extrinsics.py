@@ -28,7 +28,7 @@ Usage:
     python april_extrinsics.py
 
 Controls:
-    SPACE - Capture current frame and compute extrinsics for both cameras
+    SPACE - Capture 10 frames and average extrinsics (reduces vibration)
     S     - Save extrinsics to .npy files
     Q     - Quit without saving
     ESC   - Quit without saving
@@ -67,6 +67,9 @@ Z_FPS = 30
 TAG_FAMILY = "tag36h11"
 TAG_ID = 0
 TAG_SIZE_M = 0.16  # Black square size in meters (160mm)
+
+# Number of frames to average for stable calibration
+NUM_CALIBRATION_FRAMES = 10
 
 # =============================================================================
 # WORLD FRAME CONVENTION
@@ -231,7 +234,7 @@ class CameraCalibrator:
         print("[INFO] Both cameras initialized successfully.")
         print()
         print("CONTROLS:")
-        print("  SPACE - Capture and compute extrinsics")
+        print(f"  SPACE - Capture {NUM_CALIBRATION_FRAMES} frames and average extrinsics")
         print("  S     - Save extrinsics to .npy files")
         print("  Q/ESC - Quit")
         print()
@@ -429,9 +432,141 @@ class CameraCalibrator:
         
         return vis
     
+    def _average_transforms(self, transforms: list) -> np.ndarray:
+        """
+        Average multiple 4x4 transformation matrices.
+        
+        Uses simple averaging for translation and SVD projection for rotation.
+        
+        Args:
+            transforms: List of 4x4 transformation matrices
+            
+        Returns:
+            Averaged 4x4 transformation matrix
+        """
+        if len(transforms) == 0:
+            return None
+        if len(transforms) == 1:
+            return transforms[0]
+        
+        # Average translations
+        translations = np.array([T[:3, 3] for T in transforms])
+        avg_translation = translations.mean(axis=0)
+        
+        # Average rotations (simple matrix average + SVD to project back to SO(3))
+        rotations = np.array([T[:3, :3] for T in transforms])
+        avg_rotation = rotations.mean(axis=0)
+        
+        # Project to nearest valid rotation matrix using SVD
+        U, _, Vt = np.linalg.svd(avg_rotation)
+        R_valid = U @ Vt
+        
+        # Ensure proper rotation (det = 1, not -1)
+        if np.linalg.det(R_valid) < 0:
+            U[:, -1] *= -1
+            R_valid = U @ Vt
+        
+        # Build averaged transform
+        T_avg = np.eye(4)
+        T_avg[:3, :3] = R_valid
+        T_avg[:3, 3] = avg_translation
+        
+        return T_avg
+    
+    def capture_extrinsics_averaged(self) -> bool:
+        """
+        Capture multiple frames and average extrinsics for stability.
+        
+        Collects NUM_CALIBRATION_FRAMES frames and averages the pose estimates.
+        
+        Returns:
+            True if both cameras detected the tag successfully in enough frames.
+        """
+        print()
+        print("=" * 50)
+        print(f"CAPTURING {NUM_CALIBRATION_FRAMES} FRAMES FOR AVERAGING...")
+        print("=" * 50)
+        print("Hold cameras steady...")
+        print()
+        
+        zed_transforms = []
+        rs_transforms = []
+        
+        for i in range(NUM_CALIBRATION_FRAMES):
+            # Get fresh frames
+            zed_bgr, rs_bgr = self._get_frames()
+            
+            if zed_bgr is None or rs_bgr is None:
+                print(f"[Frame {i+1}/{NUM_CALIBRATION_FRAMES}] Failed to capture frames")
+                continue
+            
+            # Detect in ZED
+            zed_gray = cv2.cvtColor(zed_bgr, cv2.COLOR_BGR2GRAY)
+            T_zed = self._detect_apriltag(zed_gray, self.zed_K, f"ZED (frame {i+1})")
+            if T_zed is not None:
+                zed_transforms.append(T_zed)
+            
+            # Detect in RealSense
+            rs_gray = cv2.cvtColor(rs_bgr, cv2.COLOR_BGR2GRAY)
+            T_rs = self._detect_apriltag(rs_gray, self.rs_K, f"RealSense (frame {i+1})")
+            if T_rs is not None:
+                rs_transforms.append(T_rs)
+            
+            print(f"  Frame {i+1}/{NUM_CALIBRATION_FRAMES}: ZED={'OK' if T_zed is not None else 'FAIL'}, "
+                  f"RS={'OK' if T_rs is not None else 'FAIL'}")
+            
+            # Small delay between frames
+            cv2.waitKey(50)
+        
+        print()
+        print("=" * 50)
+        print("AVERAGING RESULTS...")
+        print("=" * 50)
+        
+        success = True
+        min_frames = NUM_CALIBRATION_FRAMES // 2  # Need at least half the frames
+        
+        # Average ZED transforms
+        if len(zed_transforms) >= min_frames:
+            self.zed_extrinsics = self._average_transforms(zed_transforms)
+            print(f"[ZED] Averaged {len(zed_transforms)} frames")
+            print(f"  Camera position in world: {self.zed_extrinsics[:3, 3]}")
+            
+            # Compute standard deviation of translations for quality metric
+            translations = np.array([T[:3, 3] for T in zed_transforms])
+            std = translations.std(axis=0)
+            print(f"  Translation std (mm): X={std[0]*1000:.2f}, Y={std[1]*1000:.2f}, Z={std[2]*1000:.2f}")
+        else:
+            print(f"[ZED] Not enough frames ({len(zed_transforms)}/{min_frames} required)")
+            success = False
+        
+        # Average RealSense transforms
+        if len(rs_transforms) >= min_frames:
+            self.rs_extrinsics = self._average_transforms(rs_transforms)
+            print(f"[RealSense] Averaged {len(rs_transforms)} frames")
+            print(f"  Camera position in world: {self.rs_extrinsics[:3, 3]}")
+            
+            # Compute standard deviation
+            translations = np.array([T[:3, 3] for T in rs_transforms])
+            std = translations.std(axis=0)
+            print(f"  Translation std (mm): X={std[0]*1000:.2f}, Y={std[1]*1000:.2f}, Z={std[2]*1000:.2f}")
+        else:
+            print(f"[RealSense] Not enough frames ({len(rs_transforms)}/{min_frames} required)")
+            success = False
+        
+        print()
+        if success:
+            print("[SUCCESS] Both cameras calibrated with averaged poses!")
+            print("Press 'S' to save extrinsics.")
+        else:
+            print("[FAILED] Could not detect tag in enough frames.")
+            print("Ensure AprilTag ID 0 is visible to both cameras and try again.")
+        
+        return success
+    
     def capture_extrinsics(self, zed_bgr: np.ndarray, rs_bgr: np.ndarray) -> bool:
         """
-        Capture and compute extrinsics for both cameras.
+        Capture and compute extrinsics for both cameras (single frame - legacy).
         
         Args:
             zed_bgr: ZED BGR image
@@ -556,9 +691,8 @@ class CameraCalibrator:
                 # Handle key presses
                 key = cv2.waitKey(1) & 0xFF
                 
-                if key == ord(' '):  # SPACE - capture
-                    if zed_bgr is not None and rs_bgr is not None:
-                        self.capture_extrinsics(zed_bgr, rs_bgr)
+                if key == ord(' '):  # SPACE - capture with averaging
+                    self.capture_extrinsics_averaged()
                 
                 elif key == ord('s') or key == ord('S'):  # S - save
                     self.save_extrinsics()

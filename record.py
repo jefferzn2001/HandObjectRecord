@@ -28,16 +28,16 @@ Z_FPS = 30
 PREVIEW_SCALE = 0.5  # shrink preview window
 
 # Depth operating ranges (meters). Tight ranges reduce noise for tracking.
-RS_DEPTH_MIN_M = 0.05  # sensor min/max (matches rs_depth_tuner)
-RS_DEPTH_MAX_M = 1.703
-Z_DEPTH_MIN_M = 0.05
-Z_DEPTH_MAX_M = 1.90
+RS_DEPTH_MIN_M = 0.04  # sensor min/max (matches rs_depth_tuner)
+RS_DEPTH_MAX_M = 1.886
+Z_DEPTH_MIN_M = 0.04
+Z_DEPTH_MAX_M = 2.686
 
 # Visualization depth range (meters) - separate for RealSense and ZED
-RS_VIS_MIN_M = 0.05  # RealSense visualization range (53mm)
-RS_VIS_MAX_M = 1.703 # RealSense visualization range (1770mm)
-ZED_VIS_MIN_M = 0.05  # ZED visualization range (matches current settings)
-ZED_VIS_MAX_M = 1.90
+RS_VIS_MIN_M = 0.04  # RealSense visualization range (53mm)
+RS_VIS_MAX_M = 1.886 # RealSense visualization range (1770mm)
+ZED_VIS_MIN_M = 0.04  # ZED visualization range (matches current settings)
+ZED_VIS_MAX_M = 2.686
 
 # RealSense tuning parameters (matching rs_depth_tuner.py)
 RS_COLOR_EXPOSURE = 160.0  # microseconds
