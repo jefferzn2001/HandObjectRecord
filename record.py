@@ -9,7 +9,6 @@ from typing import Optional
 
 import pyrealsense2 as rs
 import pyzed.sl as sl
-from segment_anything import sam_model_registry, SamPredictor
 
 
 # ---------- Configs ----------
@@ -106,153 +105,6 @@ def set_option_safe(sensor, option, value, desc: str):
         print(f"[WARN] Failed to set {desc}: {exc}")
 
 
-def find_checkpoint_file(checkpoints_root: str) -> Optional[str]:
-    path = Path(checkpoints_root)
-    if not path.exists():
-        print(f"[WARN] Checkpoints directory not found: {checkpoints_root}")
-        return None
-
-    ckpts = sorted(path.glob("*.pth"))
-    if not ckpts:
-        print(f"[WARN] No .pth checkpoint files under {checkpoints_root}")
-        return None
-
-    if len(ckpts) > 1:
-        print(f"[INFO] Multiple checkpoints found, using: {ckpts[0]}")
-    else:
-        print(f"[INFO] Using checkpoint: {ckpts[0]}")
-    return str(ckpts[0])
-
-
-def overlay_mask(image_bgr, mask_bool, points, alpha=0.5):
-    vis = image_bgr.copy()
-    if mask_bool is not None:
-        mask_uint8 = (mask_bool.astype(np.uint8) * 255)
-        mask_color = np.zeros_like(image_bgr)
-        mask_color[:, :, 0] = mask_uint8
-        vis = cv2.addWeighted(image_bgr, 1.0, mask_color, alpha, 0)
-
-    for (x, y) in points:
-        cv2.circle(vis, (x, y), 4, (0, 0, 255), -1)
-    return vis
-
-
-def interactive_mask_for_camera(cam_name: str, image_bgr, predictor: SamPredictor):
-    if predictor is None:
-        return None
-
-    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    predictor.set_image(image_rgb)
-
-    click_points: list[list[int]] = []
-    mask_result = None
-    vis = image_bgr.copy()
-
-    def recompute_mask():
-        nonlocal mask_result, vis
-        if not click_points:
-            mask_result = None
-            vis = image_bgr.copy()
-            return
-
-        points = np.array(click_points)
-        labels = np.ones(len(click_points), dtype=np.int32)
-        masks, scores, _ = predictor.predict(
-            point_coords=points,
-            point_labels=labels,
-            multimask_output=True,
-        )
-        best_idx = int(np.argmax(scores))
-        mask_result = masks[best_idx]
-        vis = overlay_mask(image_bgr, mask_result, click_points)
-        print(f"[SAM] {cam_name}: {len(scores)} masks, best score {scores[best_idx]:.3f}")
-
-    def mouse_cb(event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            click_points.append([x, y])
-            recompute_mask()
-        elif event == cv2.EVENT_RBUTTONDOWN and click_points:
-            click_points.pop()
-            recompute_mask()
-
-    window_name = f"SAM Init - {cam_name}"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.setMouseCallback(window_name, mouse_cb)
-    print(f"[SAM] {cam_name}: left click=FG, right click=undo, 'c'=clear, 's'=save, 'n'=skip")
-
-    while True:
-        cv2.imshow(window_name, vis)
-        key = cv2.waitKey(20) & 0xFF
-
-        if key == ord('c'):
-            click_points.clear()
-            recompute_mask()
-        elif key == ord('n'):
-            print(f"[SAM] {cam_name}: skipped mask creation.")
-            cv2.destroyWindow(window_name)
-            return None
-        elif key == ord('s'):
-            if mask_result is None:
-                print("[SAM] Need at least one foreground point before saving.")
-                continue
-            cv2.destroyWindow(window_name)
-            return mask_result
-        elif key == ord('q'):
-            print(f"[SAM] {cam_name}: aborted via 'q'.")
-            cv2.destroyWindow(window_name)
-            return None
-
-
-def run_initial_mask_workflow(camera_entries, predictor: SamPredictor):
-    if predictor is None or not camera_entries:
-        return
-
-    for entry in camera_entries:
-        cam_name = entry["name"]
-        image_bgr = entry["image"]
-        mask_path = entry["mask_path"]
-        mask = interactive_mask_for_camera(cam_name, image_bgr, predictor)
-        if mask is None:
-            continue
-        mask_uint8 = (mask.astype(np.uint8) * 255)
-        cv2.imwrite(str(mask_path), mask_uint8)
-        print(f"[SAM] Saved {cam_name} mask to: {mask_path}")
-
-
-def load_sam_predictor(checkpoint_path: str, model_type: str) -> SamPredictor:
-    device = "cuda" if cv2.cuda.getCudaEnabledDeviceCount() > 0 else "cpu"
-    print(f"[INFO] Loading SAM ({model_type}) from {checkpoint_path} onto {device}...")
-    sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
-    sam.to(device)
-    predictor = SamPredictor(sam)
-    print("[INFO] SAM model ready.")
-    return predictor
-
-
-def gather_initial_entries(seq_root: Path):
-    entries = []
-    cameras = [
-        ("RealSense", seq_root / "realsense"),
-        ("ZED", seq_root / "zed"),
-    ]
-
-    for cam_name, cam_root in cameras:
-        rgb_path = cam_root / "rgb" / "000000.png"
-        mask_path = cam_root / "masks" / "000000_mask.png"
-        if not rgb_path.exists():
-            print(f"[SAM] {cam_name}: first frame not found at {rgb_path}")
-            continue
-        image_bgr = cv2.imread(str(rgb_path))
-        if image_bgr is None:
-            print(f"[SAM] {cam_name}: failed to load {rgb_path}")
-            continue
-        entries.append({
-            "name": cam_name,
-            "image": image_bgr,
-            "mask_path": mask_path,
-        })
-
-    return entries
 
 
 def configure_zed_camera(zed: sl.Camera):
@@ -534,30 +386,6 @@ def main():
         help="Prepend timestamp to --name (e.g. '20251208_123456_Jmanip1')"
     )
     parser.add_argument(
-        "--sam-checkpoint",
-        type=str,
-        default=None,
-        help="Path to SAM checkpoint (.pth). Defaults to first file found in --checkpoints-root.",
-    )
-    parser.add_argument(
-        "--checkpoints-root",
-        type=str,
-        default="checkpoints",
-        help="Directory to search for SAM checkpoints if --sam-checkpoint is not set.",
-    )
-    parser.add_argument(
-        "--sam-model-type",
-        type=str,
-        default="vit_h",
-        choices=["vit_h", "vit_l", "vit_b"],
-        help="SAM model size to load for the interactive mask step.",
-    )
-    parser.add_argument(
-        "--skip-sam",
-        action="store_true",
-        help="Skip the interactive SAM mask selection step after starting a recording.",
-    )
-    parser.add_argument(
         "--rs-control",
         action="store_true",
         help="Enable interactive RealSense controls (exposure, gain, preset, laser, emitter).",
@@ -567,9 +395,6 @@ def main():
     root = Path(__file__).parent
     data_root = root / "data"
     data_root.mkdir(exist_ok=True)
-
-    sam_predictor = None
-    sam_checkpoint_path: Optional[str] = None
 
     # Init cameras once
     rs_setup = setup_realsense()
@@ -1037,19 +862,6 @@ def main():
         zed.close()
         cv2.destroyAllWindows()
         print("[INFO] Cameras closed. Done.")
-
-    if seq_root and frame_idx > 0 and not args.skip_sam:
-        sam_checkpoint_path = args.sam_checkpoint or find_checkpoint_file(args.checkpoints_root)
-        if not sam_checkpoint_path:
-            print("[SAM] Skipping mask workflow (no checkpoint available).")
-        else:
-            if sam_predictor is None:
-                sam_predictor = load_sam_predictor(sam_checkpoint_path, args.sam_model_type)
-            entries = gather_initial_entries(seq_root)
-            if entries:
-                run_initial_mask_workflow(entries, sam_predictor)
-            else:
-                print("[SAM] No initial frames found to annotate.")
 
 
 if __name__ == "__main__":
