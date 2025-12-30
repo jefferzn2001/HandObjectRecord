@@ -858,10 +858,15 @@ def main():
                     print(f"[INFO] Ready for next recording. Press SPACE to start.")
                 elif key == ord('n') or key == ord('N'):
                     # Don't save: delete temporary directory, keep current_seq unchanged
-                    print(f"[INFO] Discarding recording...")
-                    import shutil
-                    shutil.rmtree(temp_seq_root)
-                    print(f"[INFO] Temporary directory deleted.")
+                    if frame_idx == 0:
+                        print(f"[INFO] Recording had 0 frames. Restoring to initial state.")
+                    else:
+                        print(f"[INFO] Discarding recording...")
+                    
+                    if temp_seq_root is not None and temp_seq_root.exists():
+                        import shutil
+                        shutil.rmtree(temp_seq_root)
+                        print(f"[INFO] Temporary directory deleted.")
                     
                     # Reset recording state (but keep current_seq for next attempt)
                     frame_idx = 0
@@ -1012,18 +1017,46 @@ def main():
             # Q = quit without toggling anything further
             if key == ord('q'):
                 if recording:
-                    # Stop recording and wait for save decision
-                    print(f"\n[INFO] Recording stopped at {frame_idx} frames (quit).")
-                    print(f"[INFO] Press Y to save, N to discard (in the preview window)")
-                    waiting_for_save_decision = True
-                    recording = False
-                    # Don't break yet, wait for Y/N decision
+                    # If 0 frames, just restore to initial state without saving
+                    if frame_idx == 0:
+                        print(f"\n[INFO] Recording stopped at 0 frames (quit). Restoring to initial state.")
+                        if temp_seq_root is not None and temp_seq_root.exists():
+                            import shutil
+                            shutil.rmtree(temp_seq_root)
+                            print(f"[INFO] Temporary directory deleted.")
+                        # Reset to initial state
+                        recording = False
+                        frame_idx = 0
+                        seq_root = None
+                        temp_seq_root = None
+                        rs_root = None
+                        zed_root = None
+                        rs_render_root = None
+                        zed_render_root = None
+                        waiting_for_save_decision = False
+                        break
+                    else:
+                        # Stop recording and wait for save decision
+                        print(f"\n[INFO] Recording stopped at {frame_idx} frames (quit).")
+                        print(f"[INFO] Press Y to save, N to discard (in the preview window)")
+                        waiting_for_save_decision = True
+                        recording = False
+                        # Don't break yet, wait for Y/N decision
                 elif waiting_for_save_decision:
                     # If already waiting for decision, Q means discard and quit
-                    print(f"[INFO] Discarding recording and quitting...")
-                    import shutil
-                    shutil.rmtree(temp_seq_root)
-                    print(f"[INFO] Temporary directory deleted.")
+                    # If 0 frames, just restore to initial state
+                    if frame_idx == 0:
+                        print(f"[INFO] Recording had 0 frames. Restoring to initial state and quitting.")
+                        if temp_seq_root is not None and temp_seq_root.exists():
+                            import shutil
+                            shutil.rmtree(temp_seq_root)
+                            print(f"[INFO] Temporary directory deleted.")
+                    else:
+                        print(f"[INFO] Discarding recording and quitting...")
+                        if temp_seq_root is not None and temp_seq_root.exists():
+                            import shutil
+                            shutil.rmtree(temp_seq_root)
+                            print(f"[INFO] Temporary directory deleted.")
                     break
                 else:
                     # Not recording, just quit
@@ -1031,11 +1064,16 @@ def main():
 
     finally:
         # Clean up: if still recording or waiting for decision, discard (can't ask interactively in finally)
-        if (recording or waiting_for_save_decision) and temp_seq_root is not None and temp_seq_root.exists():
+        # Skip cleanup if 0 frames (restore to initial state)
+        if (recording or waiting_for_save_decision) and frame_idx > 0 and temp_seq_root is not None and temp_seq_root.exists():
             print(f"\n[INFO] Program exiting. Discarding unsaved recording at {frame_idx} frames.")
             import shutil
             shutil.rmtree(temp_seq_root)
             print(f"[INFO] Temporary directory deleted.")
+        elif (recording or waiting_for_save_decision) and frame_idx == 0 and temp_seq_root is not None and temp_seq_root.exists():
+            # 0 frames: just clean up without message
+            import shutil
+            shutil.rmtree(temp_seq_root)
         
         rs_pipeline.stop()
         zed.close()
