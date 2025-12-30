@@ -1,5 +1,6 @@
 import os
 import argparse
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -370,20 +371,95 @@ def setup_zed():
     return zed, runtime, image, depth, (zed_fx, zed_fy, zed_cx, zed_cy)
 
 
+def get_next_numbered_dir(parent_path: Path, person_id: int, version: int) -> Path:
+    """
+    Get the next numbered subdirectory in parent_path with format V####PERSON####SEQ########.
+    If parent doesn't exist, create it. If it exists, ask if user wants to clear it.
+    
+    When person and version match, uses the maximum existing SEQ number + 1.
+    
+    Args:
+        parent_path: Parent directory path
+        person_id: Person ID (4-digit, e.g., 1 -> 0001)
+        version: Version ID (4-digit, e.g., 1 -> 0001)
+    
+    Returns:
+        Path to the next numbered directory (e.g., parent_path/V0001PERSON0001SEQ00000001, ...)
+    """
+    # Create parent if it doesn't exist
+    if not parent_path.exists():
+        parent_path.mkdir(parents=True, exist_ok=True)
+        print(f"[INFO] Created parent directory: {parent_path}")
+    else:
+        # Check if parent has any directories with this person ID and version
+        version_person_prefix = f"V{version:04d}PERSON{person_id:04d}SEQ"
+        existing_dirs = [d for d in parent_path.iterdir() 
+                        if d.is_dir() and d.name.startswith(version_person_prefix)]
+        if existing_dirs:
+            # Extract sequence numbers
+            existing_seqs = []
+            for d in existing_dirs:
+                try:
+                    # Format: V####PERSON####SEQ########
+                    seq_part = d.name[len(version_person_prefix):]
+                    seq_num = int(seq_part)
+                    existing_seqs.append(seq_num)
+                except ValueError:
+                    continue
+            existing_seqs = sorted(existing_seqs)
+            print(f"[INFO] Found existing directories for V{version:04d} PERSON{person_id:04d} in {parent_path}: {existing_seqs}")
+            response = input(f"[QUESTION] Do you want to clear directories for V{version:04d} PERSON{person_id:04d} in {parent_path}? (y/n): ").strip().lower()
+            if response == 'y':
+                for d in existing_dirs:
+                    shutil.rmtree(d)
+                    print(f"[INFO] Removed {d}")
+    
+    # Find the next available sequence number for this person and version
+    # Simply use max + 1 (no gap filling)
+    version_person_prefix = f"V{version:04d}PERSON{person_id:04d}SEQ"
+    existing_numbers = set()
+    for d in parent_path.iterdir():
+        if d.is_dir() and d.name.startswith(version_person_prefix):
+            try:
+                # Extract sequence number from V####PERSON####SEQ########
+                seq_part = d.name[len(version_person_prefix):]
+                seq_num = int(seq_part)
+                existing_numbers.add(seq_num)
+            except ValueError:
+                continue
+    
+    if not existing_numbers:
+        next_seq = 1
+    else:
+        next_seq = max(existing_numbers) + 1
+    
+    # Format as V####PERSON####SEQ########
+    dir_name = f"V{version:04d}PERSON{person_id:04d}SEQ{next_seq:08d}"
+    next_dir = parent_path / dir_name
+    return next_dir
+
+
 def main():
     global RS_COLOR_EXPOSURE, RS_COLOR_GAIN
     
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--name",
+        "--data_path",
         type=str,
-        default=None,
-        help="Recording name (e.g. 'Jmanip1'). If not provided, uses timestamp."
+        required=True,
+        help="Parent directory path (e.g., 'data/test_wei_02'). Subdirectories will be named PERSON####SEQ########"
     )
     parser.add_argument(
-        "--use-timestamp",
-        action="store_true",
-        help="Prepend timestamp to --name (e.g. '20251208_123456_Jmanip1')"
+        "--person",
+        type=int,
+        required=True,
+        help="Person ID (e.g., 1, 2, 3). Will be formatted as 4-digit number (0001, 0002, ...)"
+    )
+    parser.add_argument(
+        "--version",
+        type=int,
+        required=True,
+        help="Version ID (e.g., 1, 2, 3). Will be formatted as 4-digit number (0001, 0002, ...). Used to prevent conflicts when code is modified."
     )
     parser.add_argument(
         "--rs-control",
@@ -393,8 +469,19 @@ def main():
     args = parser.parse_args()
 
     root = Path(__file__).parent
-    data_root = root / "data"
-    data_root.mkdir(exist_ok=True)
+    
+    # Get parent directory path
+    parent_path = Path(args.data_path)
+    if not parent_path.is_absolute():
+        parent_path = root / parent_path
+    
+    # Validate person ID and version
+    if args.person < 1 or args.person > 9999:
+        print(f"[ERROR] Person ID must be between 1 and 9999, got {args.person}")
+        return
+    if args.version < 1 or args.version > 9999:
+        print(f"[ERROR] Version ID must be between 1 and 9999, got {args.version}")
+        return
 
     # Init cameras once
     rs_setup = setup_realsense()
@@ -444,10 +531,13 @@ def main():
     recording = False
     frame_idx = 0
     seq_root: Optional[Path] = None
+    temp_seq_root: Optional[Path] = None  # Temporary directory during recording
     rs_root = None
     zed_root = None
     rs_render_root = None
     zed_render_root = None
+    current_seq = 0  # Current sequence number (will be set on first recording)
+    waiting_for_save_decision = False  # Flag to indicate we're waiting for y/n decision
     # zed_depth_ema removed - EMA smoothing disabled
     
     # Setup preview window
@@ -588,7 +678,7 @@ def main():
                 zed_vis_color = None
 
             # ==================== Save if recording ====================
-            if recording:
+            if recording and rs_root is not None and zed_root is not None:
                 # RealSense file paths - always save raw depth
                 rs_rgb_path = rs_root / "rgb" / f"{frame_idx:06d}.png"
                 rs_depth_path = rs_root / "depth" / f"{frame_idx:06d}.png"
@@ -596,7 +686,7 @@ def main():
                 cv2.imwrite(str(rs_depth_path), depth_mm)
                 
                 # RealSense rendered depth (colormap visualization)
-                if rs_vis_color is not None:
+                if rs_vis_color is not None and rs_render_root is not None:
                     rs_render_path = rs_render_root / f"{frame_idx:06d}.png"
                     cv2.imwrite(str(rs_render_path), rs_vis_color)
 
@@ -609,7 +699,7 @@ def main():
                     cv2.imwrite(str(zed_depth_path), depth_mm_zed)
                     
                     # ZED rendered depth (colormap visualization)
-                    if zed_vis_color is not None:
+                    if zed_vis_color is not None and zed_render_root is not None:
                         zed_render_path = zed_render_root / f"{frame_idx:06d}.png"
                         cv2.imwrite(str(zed_render_path), zed_vis_color)
 
@@ -629,8 +719,19 @@ def main():
             else:
                 vis = np.vstack([rs_bgr, rs_vis_color])
 
-            # Add tiny recording indicator text
-            if recording:
+            # Add status text
+            if waiting_for_save_decision:
+                cv2.putText(
+                    vis,
+                    "Recording stopped. Press Y to save, N to discard",
+                    (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+            elif recording:
                 cv2.putText(
                     vis,
                     "REC",
@@ -667,25 +768,38 @@ def main():
             # SPACE = toggle recording
             if key == ord(' '):
                 if not recording:
-                    # Start recording: create folders and cam_K.txt
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    if args.name:
-                        seq_name = f"{timestamp}_{args.name}" if args.use_timestamp else args.name
-                    else:
-                        seq_name = timestamp
-                    seq_root = data_root / seq_name
+                    # Start recording: create temporary folder
+                    # First, determine the next sequence number
+                    if current_seq == 0:
+                        # First recording: find the next available seq number
+                        version_person_prefix = f"V{args.version:04d}PERSON{args.person:04d}SEQ"
+                        existing_numbers = set()
+                        for d in parent_path.iterdir():
+                            if d.is_dir() and d.name.startswith(version_person_prefix):
+                                try:
+                                    seq_part = d.name[len(version_person_prefix):]
+                                    seq_num = int(seq_part)
+                                    existing_numbers.add(seq_num)
+                                except ValueError:
+                                    continue
+                        if not existing_numbers:
+                            current_seq = 1
+                        else:
+                            current_seq = max(existing_numbers) + 1
                     
-                    # Check if folder exists and warn
-                    if seq_root.exists():
-                        print(f"[WARN] Folder {seq_root} already exists! Overwriting...")
+                    # Create temporary directory for this recording session
+                    temp_dir_name = f"V{args.version:04d}PERSON{args.person:04d}SEQ{current_seq:08d}_TEMP"
+                    temp_seq_root = parent_path / temp_dir_name
+                    temp_seq_root.mkdir(parents=True, exist_ok=True)
+                    print(f"[INFO] Recording started (temporary): {temp_seq_root}")
                     
                     # Create traj folder for HaMeR output
-                    traj_root = seq_root / "traj"
+                    traj_root = temp_seq_root / "traj"
 
-                    rs_root = seq_root / "realsense"
-                    zed_root = seq_root / "zed"
-                    rs_render_root = seq_root / "real_Depth"
-                    zed_render_root = seq_root / "Zed_Depth"
+                    rs_root = temp_seq_root / "realsense"
+                    zed_root = temp_seq_root / "zed"
+                    rs_render_root = temp_seq_root / "real_Depth"
+                    zed_render_root = temp_seq_root / "Zed_Depth"
 
                     for d in [
                         rs_root / "rgb",
@@ -709,12 +823,56 @@ def main():
                                   width=Z_WIDTH, height=Z_HEIGHT, rotated=False)
 
                     frame_idx = 0
-                    print(f"[INFO] Recording started: {seq_root}")
                     recording = True
                 else:
-                    # Stop recording and exit
-                    print(f"[INFO] Recording stopped at {frame_idx} frames.")
-                    break
+                    # Stop recording: wait for user decision (Y/N key in window)
+                    print(f"\n[INFO] Recording stopped at {frame_idx} frames.")
+                    print(f"[INFO] Press Y to save, N to discard (in the preview window)")
+                    waiting_for_save_decision = True
+                    recording = False
+            
+            # Handle save decision (Y/N keys) when waiting
+            if waiting_for_save_decision:
+                if key == ord('y') or key == ord('Y'):
+                    # Save: rename temporary directory to final name
+                    final_dir_name = f"V{args.version:04d}PERSON{args.person:04d}SEQ{current_seq:08d}"
+                    final_seq_root = parent_path / final_dir_name
+                    
+                    if final_seq_root.exists():
+                        print(f"[ERROR] Target directory already exists: {final_seq_root}")
+                        print(f"[INFO] Keeping temporary directory: {temp_seq_root}")
+                    else:
+                        temp_seq_root.rename(final_seq_root)
+                        print(f"[INFO] Recording saved to: {final_seq_root}")
+                        current_seq += 1  # Increment for next recording only if saved
+                    
+                    # Reset recording state
+                    frame_idx = 0
+                    seq_root = None
+                    temp_seq_root = None
+                    rs_root = None
+                    zed_root = None
+                    rs_render_root = None
+                    zed_render_root = None
+                    waiting_for_save_decision = False
+                    print(f"[INFO] Ready for next recording. Press SPACE to start.")
+                elif key == ord('n') or key == ord('N'):
+                    # Don't save: delete temporary directory, keep current_seq unchanged
+                    print(f"[INFO] Discarding recording...")
+                    import shutil
+                    shutil.rmtree(temp_seq_root)
+                    print(f"[INFO] Temporary directory deleted.")
+                    
+                    # Reset recording state (but keep current_seq for next attempt)
+                    frame_idx = 0
+                    seq_root = None
+                    temp_seq_root = None
+                    rs_root = None
+                    zed_root = None
+                    rs_render_root = None
+                    zed_render_root = None
+                    waiting_for_save_decision = False
+                    print(f"[INFO] Ready for next recording. Press SPACE to start.")
 
             # T = print depth debug stats (matching rs_depth_tuner format)
             if key == ord('t'):
@@ -854,10 +1012,31 @@ def main():
             # Q = quit without toggling anything further
             if key == ord('q'):
                 if recording:
-                    print(f"[INFO] Recording stopped at {frame_idx} frames (quit).")
-                break
+                    # Stop recording and wait for save decision
+                    print(f"\n[INFO] Recording stopped at {frame_idx} frames (quit).")
+                    print(f"[INFO] Press Y to save, N to discard (in the preview window)")
+                    waiting_for_save_decision = True
+                    recording = False
+                    # Don't break yet, wait for Y/N decision
+                elif waiting_for_save_decision:
+                    # If already waiting for decision, Q means discard and quit
+                    print(f"[INFO] Discarding recording and quitting...")
+                    import shutil
+                    shutil.rmtree(temp_seq_root)
+                    print(f"[INFO] Temporary directory deleted.")
+                    break
+                else:
+                    # Not recording, just quit
+                    break
 
     finally:
+        # Clean up: if still recording or waiting for decision, discard (can't ask interactively in finally)
+        if (recording or waiting_for_save_decision) and temp_seq_root is not None and temp_seq_root.exists():
+            print(f"\n[INFO] Program exiting. Discarding unsaved recording at {frame_idx} frames.")
+            import shutil
+            shutil.rmtree(temp_seq_root)
+            print(f"[INFO] Temporary directory deleted.")
+        
         rs_pipeline.stop()
         zed.close()
         cv2.destroyAllWindows()

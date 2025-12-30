@@ -12,6 +12,7 @@ Usage:
 import argparse
 import cv2
 import numpy as np
+import shutil
 from pathlib import Path
 from typing import Optional
 import torch
@@ -47,6 +48,8 @@ def load_sam_predictor(checkpoint_path: str, model_type: str) -> SamPredictor:
     predictor = SamPredictor(sam)
     print("[INFO] SAM model ready.")
     return predictor
+
+
 
 
 def extract_and_save_features(data_path: Path, predictor: SamPredictor):
@@ -113,7 +116,7 @@ def main():
         "--data_path",
         type=str,
         required=True,
-        help="Path to recording folder (e.g., data/test_wei_01)",
+        help="Parent directory path (e.g., 'data/test_wei_02'). Will process the highest numbered subdirectory (1, 2, 3, ...)",
     )
     parser.add_argument(
         "--sam-checkpoint",
@@ -136,10 +139,42 @@ def main():
     )
     args = parser.parse_args()
 
-    data_path = Path(args.data_path)
-    if not data_path.exists():
-        print(f"[ERROR] Data path not found: {data_path}")
+    root = Path(__file__).parent
+    
+    # Get parent directory path
+    parent_path = Path(args.data_path)
+    if not parent_path.is_absolute():
+        parent_path = root / parent_path
+    
+    if not parent_path.exists():
+        print(f"[ERROR] Parent directory not found: {parent_path}")
         return
+    
+    # Find all matching subdirectories (V####PERSON####SEQ######## format)
+    existing_dirs = []
+    for d in parent_path.iterdir():
+        if d.is_dir() and d.name.startswith("V") and "PERSON" in d.name and "SEQ" in d.name:
+            # Skip temporary directories
+            if d.name.endswith("_TEMP"):
+                continue
+            try:
+                # Extract sequence number from V####PERSON####SEQ########
+                # Format: V####PERSON####SEQ########
+                if "SEQ" in d.name:
+                    seq_part = d.name.split("SEQ")[1]
+                    seq_num = int(seq_part)
+                    existing_dirs.append((d, seq_num))
+            except (ValueError, IndexError):
+                continue
+    
+    if not existing_dirs:
+        print(f"[ERROR] No numbered subdirectories found in {parent_path}")
+        print(f"[INFO] Please run record.py first to create a recording.")
+        return
+    
+    # Sort by sequence number
+    existing_dirs.sort(key=lambda x: x[1])
+    print(f"[INFO] Found {len(existing_dirs)} directories to process")
 
     # Find checkpoint
     sam_checkpoint_path = args.sam_checkpoint or find_checkpoint_file(args.checkpoints_root)
@@ -147,20 +182,23 @@ def main():
         print("[ERROR] No SAM checkpoint found. Please specify --sam-checkpoint or ensure checkpoints/ contains a .pth file.")
         return
 
-    # Load SAM model
+    # Load SAM model (once for all directories)
     predictor = load_sam_predictor(sam_checkpoint_path, args.sam_model_type)
 
-    # Extract and save features
+    # Process each directory
     print("\n" + "="*60)
     print("STEP 1: Extracting SAM features (this may take a while...)")
     print("="*60)
-    extract_and_save_features(data_path, predictor)
+    
+    for idx, (data_path, seq_num) in enumerate(existing_dirs, 1):
+        print(f"\n[{idx}/{len(existing_dirs)}] Processing directory: {data_path.name}")
+        extract_and_save_features(data_path, predictor)
     
     print("\n" + "="*60)
-    print("STEP 1 COMPLETE: Features saved!")
+    print(f"STEP 1 COMPLETE: Features saved for {len(existing_dirs)} directories!")
     print("="*60)
     print(f"\nNext step: Run sam_detect_blue.py to quickly detect blue objects:")
-    print(f"  python sam_detect_blue.py --data_path {data_path}")
+    print(f"  python sam_detect_blue.py --data_path {parent_path}")
 
 
 if __name__ == "__main__":
