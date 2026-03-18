@@ -33,11 +33,42 @@ offset — the coordinate origin is the object itself.
 
 ## 2) Transfer
 
-Zip episode folders → upload to Google Drive → download on workstation.
-Episodes are self-contained (RGB + intrinsics + extrinsics + FP poses).
+Zip episode folders (e.g. `data/cup_grasp/`) → upload to Google Drive → download on workstation.
 
 
-## 3) Post-process (workstation — one command)
+## 3) Workstation setup (one-time)
+
+```bash
+# 1. Clone the repo
+git clone git@github.com:jefferzn2001/HandObjectRecord.git
+cd HandObjectRecord
+
+# 2. Put your data in data/
+#    Download the zip from Google Drive, unzip so you have:
+#    data/cup_grasp/001/
+#    data/cup_grasp/002/
+#    ...
+unzip ~/Downloads/cup_grasp.zip -d data/
+
+# 3. Create HaMeR conda env
+conda create -n hamer python=3.10 -y
+conda activate hamer
+
+# 4. Install HaMeR + ViTPose
+cd record/hamer
+pip install torch torchvision  # or: --index-url https://download.pytorch.org/whl/cu118
+pip install -e .[all]
+mkdir -p third-party && cd third-party
+git clone https://github.com/ViTAE-Transformer/ViTPose.git
+cd ViTPose && pip install -v -e . && cd ../..
+cd ../..
+
+# 5. Download HaMeR models
+cd record/hamer && bash fetch_demo_data.sh && cd ../..
+```
+
+
+## 4) Post-process (workstation — one command)
 
 ```bash
 conda activate hamer
@@ -90,6 +121,19 @@ data/cup_grasp/001/
 ```
 
 **Hand and object trajectories share the same object-centric coordinate frame.**
+
+
+## Fix ObjectTracking submodule (if you see "embedded git repository" warning)
+
+If `ObjectTracking` was added as a submodule, convert it to a regular folder:
+
+```bash
+git rm --cached ObjectTracking
+rm -rf ObjectTracking/.git
+git add ObjectTracking/
+git commit -m "Convert ObjectTracking to regular folder"
+git push
+```
 
 
 ## File structure
