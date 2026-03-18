@@ -2,15 +2,13 @@
 """
 3D Visualization of Hand + Object Trajectories.
 
-Plots combined trajectories from:
-- HaMeR: Hand keypoints (wrist + 5 fingertips) in world frame
-- FoundationPose: Object pose in camera frame (transformed to world)
+DEPRECATED: Use postprocess.py instead — it runs HaMeR + triangulation + EEF
+and automatically generates the 3D visualization:
 
-Usage:
-    conda activate fp_cams
-    python visualize3d.py --name Jmanip1
-    python visualize3d.py --name Jmanip1 --mesh J  # Show object mesh points
-    python visualize3d.py --name Jmanip1 --mesh J --no_interactive  # Save only, no display
+    python record/hamer/postprocess.py --data_path data/cup_grasp/001 --mesh cup
+
+This script is kept for reference but expects the old data layout and AprilTag
+calibration. The new pipeline uses FP-based calibration and object-centric frame.
 """
 
 import argparse

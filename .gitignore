@@ -1,36 +1,20 @@
-# --- Python junk ---
+# Data (recordings, episodes)
+data/
+
+# HaMeR third-party (ViTPose etc. — large, clone separately)
+record/hamer/third-party/
+
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.egg-info/
 
-# --- Environments / config ---
+# Environments
 .env/
 .venv/
 
-# --- Camera / FP recordings ---
-data/
-Zed_Depth/
-*.mcap
-*.bag
-*.mp4
-*.avi
-*.mov
-
-# --- Heavy SDK blobs ---
-ZED_SDK/
-*.whl
-*.zip
-*.tar
-*.tar.gz
-
-# --- Logs / misc ---
-logs/
-wandb/
-outputs/
-checkpoints/
-
-# IDE stuff
+# IDE
 .vscode/
 .idea/

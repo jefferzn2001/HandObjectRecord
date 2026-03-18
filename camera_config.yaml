@@ -1,0 +1,18 @@
+# Camera configuration — auto-detected serials are used by default,
+# but you can pin a specific RS as "primary" (gets live FP during recording).
+#
+# primary_rs: serial number of the RealSense to show FP overlay on during recording.
+# All other detected cameras still record RGB.
+
+primary_rs: "338622071243"
+
+# Known cameras (for reference / labelling):
+cameras:
+  rs_045322074026:
+    type: realsense
+    serial: "045322074026"
+    model: "Intel RealSense D435I"
+  rs_338622071243:
+    type: realsense
+    serial: "338622071243"
+    model: "Intel RealSense D435I"
